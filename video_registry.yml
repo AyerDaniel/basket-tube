@@ -1,0 +1,18 @@
+# Video Registry — single source of truth for all videos in the pipeline.
+#
+# Each entry maps a YouTube video ID to its metadata.
+# The `title` field is the stem used for all pipeline artifacts
+# (e.g. "{title}.mp4", "{title}.json", "{title}.vtt").
+#
+# To add a new video, append an entry here and restart the API.
+
+videos:
+  - id: WLQ1-clip
+    title: "Warriors vs Lakers Q1 Clip"
+    url: local
+    source_language: en
+
+  - id: LPDnemFoqVk
+    title: "Warriors & Lakers Instant Classic - 2021 Play-In Tournament"
+    url: https://www.youtube.com/watch?v=LPDnemFoqVk
+    source_language: en

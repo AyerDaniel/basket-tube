@@ -1,0 +1,105 @@
+services:
+  # ── CPU API orchestrator ──────────────────────────────────────────
+  api:
+    container_name: basket-tube-api
+    profiles: [nvidia, cpu]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      args:
+        USER_UID: "${UID:-1000}"
+        USER_GID: "${GID:-1000}"
+    restart: unless-stopped
+    network_mode: host
+    command: ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      - FW_INFERENCE_GPU_URL=http://localhost:8090
+      - FW_WHISPER_API_URL=http://localhost:8000
+      - FW_LOGFIRE_WRITE_TOKEN=${LOGFIRE_WRITE_TOKEN:-}
+    volumes:
+      - ./pipeline_data:/app/pipeline_data
+      - ./video_registry.yml:/app/video_registry.yml:ro
+      - ./api:/app/api
+    # Binds to :8080
+
+  # ── Frontend (Next.js) ───────────────────────────────────────────
+  frontend:
+    container_name: basket-tube-frontend
+    profiles: [nvidia, cpu]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        API_URL: http://localhost:8080
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - PORT=8501
+      - HOSTNAME=0.0.0.0
+    # Binds to :8501
+
+  # ── STT (Whisper) — GPU ───────────────────────────────────────────
+  whisper:
+    container_name: basket-tube-whisper
+    profiles: [nvidia]
+    image: ghcr.io/speaches-ai/speaches:latest-cuda-12.6.3
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-medium
+    volumes:
+      - whisper-cache:/home/ubuntu/.cache/huggingface/hub
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://0.0.0.0:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Binds to :8000
+
+  # ── GPU inference (all vision models) ────────────────────────────
+  inference:
+    container_name: basket-tube-inference
+    profiles: [nvidia]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      args:
+        USER_UID: "${UID:-1000}"
+        USER_GID: "${GID:-1000}"
+    restart: unless-stopped
+    network_mode: host
+    shm_size: "8gb"
+    environment:
+      - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
+      - INFERENCE_MODE=${INFERENCE_MODE:-local}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - BT_DATA_DIR=/app/pipeline_data/api
+      - MODEL_CACHE_DIR=/cache/roboflow
+      - HF_HOME=/cache/huggingface
+      - TORCH_HOME=/cache/torch
+      - LOGFIRE_TOKEN=${LOGFIRE_WRITE_TOKEN:-}
+    volumes:
+      - ./pipeline_data:/app/pipeline_data
+      - ./video_registry.yml:/app/video_registry.yml:ro
+      - ./notebooks:/app/notebooks
+      - inference-cache:/cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Binds to :8090
+
+volumes:
+  whisper-cache:
+  inference-cache:

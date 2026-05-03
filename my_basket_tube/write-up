@@ -1,0 +1,93 @@
+  ---                                                                                                                                                                                         
+  BasketTube — AI Basketball Game Analyzer                                                                                                                                                    
+                                                                                                                                                                                              
+  Overview                                                                                                                                                                                    
+                                                                                                                                                                                              
+  Offline pipeline for semantic analysis of basketball broadcast footage. Two parallel tracks: commentary-based Q&A and vision-based action retrieval. Both use the same game footage and     
+  Whisper transcription as a shared foundation.                                                                                                                                               
+                                                                                                                                                                                              
+  ---             
+  Shared Foundation
+                   
+  - Input: Single game video (game_1.mp4, Lakers vs Warriors)
+  - Transcription: Whisper medium (local) → subtitles.csv — 1153 segments, frame-aligned at 30fps                                                                                             
+  - Frame extraction: Full-resolution frames (1918×1078) at 30fps → game_1/frames/                                                                                                            
+                                                                                                                                                                                              
+  ---                                                                                                                                                                                         
+  Track 1 — Commentary-Based Q&A                                                                                                                                                              
+                                
+  Goal: Answer natural language questions about player performance using commentary as evidence.
+                                                                                                                                                                                              
+  Architecture (RAG pipeline):
+  1. CLIP text encoder embeds all 1153 subtitle segments → embedding index                                                                                                                    
+  2. User query → CLIP text encoder → nearest-neighbor retrieval (top-K)                                                                                                                      
+  3. Retrieved subtitle chunks → LLM synthesis → structured answer      
+  4. M3U playlist generated for matching video segments (VLC-playable)                                                                                                                        
+                                                                                                                                                                                              
+  Current state: Working (player_performance.py), using Sonnet API for synthesis.                                                                                                             
+                                                                                                                                                                                              
+  Next step — Teacher-Student Distillation:                                                                                                                                                   
+  - Teacher: Sonnet (generate_dataset.py) — receives 3 frames + subtitle, returns structured 4-section response (DIRECT RESPONSE / SUMMARY / EVIDENCE / DISCLAIMER)                           
+  - Dataset: ~1153 entries, each with 3 base64 frames + commentary + Sonnet response                                                                                                          
+  - Student: PaliGemma-3B fine-tuned via QLoRA on generated dataset (finetune_vlm.py)
+  - Goal: local inference with no API calls at runtime                                                                                                                                        
+                                                                                                                                                                                              
+  ---                                                                                                                                                                                         
+  Track 2 — Vision-Based Action Retrieval                                                                                                                                                     
+                                                                                                                                                                                              
+  Goal: Retrieve video moments matching a text query using visual content, not commentary.
+                                                                                                                                                                                              
+  Architecture (VLM):                                                                                                                                                                         
+  Frame t-start ┐                                                                                                                                                                             
+  Frame t-mid   ├→ frozen CLIP ViT-L/14 (1024-dim each) → concat (3072-dim) → ProjectionLayer → 768-dim                                                                                       
+  Frame t-end   ┘                                                                                                                                                                             
+                                                            ↕ CosineEmbeddingLoss                                                                                                             
+                                                CLIP text encoder (subtitle text) → 768-dim                                                                                                   
+                                                                                                                                                                                              
+  - 3 frames sampled per subtitle segment: start/mid/end of a context window centered on the subtitle                                                                                         
+  - CONTEXT_SECONDS controls window spread — 5 models trained (3s, 5s, 10s, 15s, 20s)                                                                                                         
+  - At query time: CLIP text encoder embeds query → cosine similarity against visual index → top-K results → M3U playlist                                                                     
+                                                                                                                                                                                              
+  Training results: Cosine similarity 0.54–0.64 after 9 epochs; loss plateau at ~0.408 (ceiling for single-game dataset)                                                                      
+                                                                                                                                                                                              
+  ---                                                                                                                                                                                         
+  Key Design Decisions
+                      
+  ┌───────────────────────────────┬────────────────────────────────────────────────────────────┐
+  │           Decision            │                           Reason                           │                                                                                              
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ CLIP for both vision and text │ Shared embedding space; no separate text model needed      │                                                                                              
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ 3 frames, not full video      │ VRAM constraint; captures temporal context cheaply         │                                                                                              
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────┤                                                                                              
+  │ Whisper as free supervision   │ No manual labeling; commentary is weak but aligned signal  │                                                                                              
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────┤                                                                                              
+  │ Sonnet as teacher             │ Generates richer ground truth than commentary text alone   │
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────┤                                                                                              
+  │ QLoRA for PaliGemma           │ RTX 3080 16GB can't fit full fine-tune; LoRA adapters only │
+  ├───────────────────────────────┼────────────────────────────────────────────────────────────┤                                                                                              
+  │ M3U playlist output           │ Zero-quality-loss playback; standard VLC format            │
+  └───────────────────────────────┴────────────────────────────────────────────────────────────┘                                                                                              
+                  
+  ---                                                                                                                                                                                         
+  Status          
+
+  ┌─────────────────────────────────────┬─────────────────────────┐
+  │              Component              │         Status          │
+  ├─────────────────────────────────────┼─────────────────────────┤
+  │ Whisper transcription               │ Done                    │
+  ├─────────────────────────────────────┼─────────────────────────┤
+  │ Frame extraction                    │ Done                    │                                                                                                                           
+  ├─────────────────────────────────────┼─────────────────────────┤
+  │ VLM training (5 context windows)    │ Done                    │                                                                                                                           
+  ├─────────────────────────────────────┼─────────────────────────┤
+  │ Embedding index (all 5 models)      │ Done                    │
+  ├─────────────────────────────────────┼─────────────────────────┤                                                                                                                           
+  │ RAG query UI                        │ Done                    │
+  ├─────────────────────────────────────┼─────────────────────────┤                                                                                                                           
+  │ Dataset generation (Sonnet teacher) │ In progress (~800/1153) │
+  ├─────────────────────────────────────┼─────────────────────────┤                                                                                                                           
+  │ PaliGemma fine-tuning               │ Pending                 │
+  ├─────────────────────────────────────┼─────────────────────────┤                                                                                                                           
+  │ Local inference integration         │ Pending                 │
+  └─────────────────────────────────────┴─────────────────────────┘
